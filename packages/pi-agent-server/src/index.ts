@@ -80,6 +80,7 @@ import { createWebFetchTool } from './tools/web-fetch.ts';
 import { resolveSearchProvider } from './tools/search/resolve-provider.ts';
 import { createSearchTool } from './tools/search/create-search-tool.ts';
 import { allowCraftMetadataProperties, stripCraftMetadata } from './craft-metadata-schema.ts';
+import { applySystemPromptOverride } from './system-prompt-override.ts';
 
 // ============================================================
 // Types — JSONL Protocol
@@ -675,7 +676,10 @@ async function ensureSession(): Promise<AgentSession> {
     sessionOptions.thinkingLevel = piThinkingLevel;
   }
 
-  // Inject our system-prompt-override extension via a custom ResourceLoader.
+  // Inject the main-session system-prompt extension via a custom ResourceLoader.
+  // This wires up the before_agent_start hook that supplies currentMainSystemPrompt
+  // on every prompt() turn (Pi SDK wipes state.systemPrompt each turn — see
+  // mainSystemPromptInjector for details).
   if (sessionOptions.agentDir) {
     const settingsManager = PiSettingsManager.create(cwd, sessionOptions.agentDir);
     sessionOptions.settingsManager = settingsManager;
@@ -986,12 +990,11 @@ async function queryLlm(request: LLMQueryRequest): Promise<LLMQueryResult> {
 
     debugLog(`[queryLlm] Created ephemeral session: ${ephemeralSession.sessionId}`);
 
-    // Set system prompt
-    if (request.systemPrompt) {
-      ephemeralSession.agent.state.systemPrompt = request.systemPrompt;
-    } else {
-      ephemeralSession.agent.state.systemPrompt = 'Reply with ONLY the requested text. No explanation.';
-    }
+    // Force the system prompt — see system-prompt-override.ts for why direct
+    // assignment to `state.systemPrompt` doesn't survive `session.prompt()`.
+    const promptForSession =
+      request.systemPrompt ?? 'Reply with ONLY the requested text. No explanation.';
+    applySystemPromptOverride(ephemeralSession, promptForSession);
 
     // Collect response text and errors from events
     let result = '';
